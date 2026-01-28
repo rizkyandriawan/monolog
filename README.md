@@ -4,6 +4,21 @@ A lightweight, single-node message broker that speaks the Kafka protocol. Drop-i
 
 ![Web UI](screenshot.png)
 
+## Why Monolog?
+
+Running Kafka locally is a pain. You need Zookeeper (or KRaft), deal with JVM memory overhead, wait for slow startups, and manage multiple processes just to test a simple producer/consumer flow. Docker Compose helps, but you're still looking at 500MB+ RAM for something that should be simple.
+
+Monolog exists because sometimes you just want to:
+
+- **Develop locally** without spinning up infrastructure
+- **Run integration tests** in CI without container overhead
+- **Prototype quickly** without Kafka's operational complexity
+- **Learn the Kafka protocol** with a readable, hackable codebase
+
+It's not a Kafka replacement. It's a Kafka stand-in for when you don't need distributed consensus, replication, or horizontal scaling - you just need something that speaks the protocol.
+
+~5MB binary. ~20MB RAM. Starts instantly. Works with your existing Kafka clients.
+
 ## Features
 
 - **Kafka Protocol Compatible** - Works with standard Kafka clients (tested with Sarama, kafka-go)
