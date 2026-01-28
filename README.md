@@ -23,7 +23,7 @@ It's not a Kafka replacement. It's a Kafka stand-in for when you don't need dist
 
 Monolog is also meant for **production use in light workload scenarios**.
 
-If you're running a hobby project or an early-stage startup, a proper Kafka cluster (3 brokers minimum for fault tolerance) on AWS can easily cost $300-500/month - often dominating your entire infrastructure budget before you even have real traffic. For many small projects doing <1000 messages/second, that's massive overkill.
+If you're running a hobby project or an early-stage startup, a proper Kafka cluster (3 brokers minimum for fault tolerance) on AWS can easily cost $300-500/month - often dominating your entire infrastructure budget before you even have real traffic. For many small projects doing <100 messages/second, that's massive overkill.
 
 Monolog can run on a $5/month VPS alongside your app. No cluster coordination, no ZooKeeper, no JVM tuning. Just a single binary that handles your message queue needs until you actually need to scale.
 
