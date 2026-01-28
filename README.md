@@ -19,6 +19,30 @@ It's not a Kafka replacement. It's a Kafka stand-in for when you don't need dist
 
 ~5MB binary. ~20MB RAM. Starts instantly. Works with your existing Kafka clients.
 
+### Production for Light Workloads
+
+Monolog is also meant for **production use in light workload scenarios**.
+
+If you're running a hobby project or an early-stage startup, a proper Kafka cluster (3 brokers minimum for fault tolerance) on AWS can easily cost $300-500/month - often dominating your entire infrastructure budget before you even have real traffic. For many small projects doing <1000 messages/second, that's massive overkill.
+
+Monolog can run on a $5/month VPS alongside your app. No cluster coordination, no ZooKeeper, no JVM tuning. Just a single binary that handles your message queue needs until you actually need to scale.
+
+> **Note:** Production stress testing is still ongoing. Current benchmarks cover dev/test scenarios. If you're considering production use, start with non-critical workloads and monitor closely.
+
+### Current Benchmark Results
+
+Tested on Linux with kafka-go client, SQLite backend:
+
+| Metric | Result |
+|--------|--------|
+| Throughput (sustained) | 200 msg/s |
+| Latency p50 | 1-14ms |
+| Latency p99 | 6-41ms |
+| Memory (33k messages) | 25.8 MB |
+| Error rate | 0% |
+
+Mixed workload (concurrent produce + consume) maintains full throughput with no degradation.
+
 ## Features
 
 - **Kafka Protocol Compatible** - Works with standard Kafka clients (tested with Sarama, kafka-go)
