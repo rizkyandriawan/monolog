@@ -1,0 +1,35 @@
+# Binaries
+/monolog
+*.exe
+
+# Docs (internal/generated)
+VISION.md
+ARCHITECTURE.md
+STATUS.md
+ROUNDTABLE_REVIEW.md
+
+# Testing
+test/
+testdata/
+localtest/
+
+# Data directory
+data/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+
+# Test coverage
+coverage.out
+
+# Build artifacts
+dist/
+
+# Web UI build
+web/node_modules/
+static/
