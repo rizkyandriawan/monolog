@@ -54,7 +54,7 @@ function NavItem({ icon, label, active, badge, onClick }: NavItemProps) {
 interface LayoutProps {
   children: ReactNode
   currentPage: string
-  onNavigate: (page: string) => void
+  onNavigate: (page: string, data?: { topic?: string; group?: string }) => void
   stats: { topics: number; groups: number; pending: number }
   connected: boolean
 }

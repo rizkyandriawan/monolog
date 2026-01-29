@@ -25,7 +25,7 @@ type ServerConfig struct {
 }
 
 type StorageConfig struct {
-	Backend    string        `yaml:"backend"` // "badger" or "sqlite"
+	Backend    string        `yaml:"backend"` // "sqlite" or "sqlite:memory"
 	DataDir    string        `yaml:"data_dir"`
 	SyncWrites bool          `yaml:"sync_writes"`
 	GCInterval time.Duration `yaml:"gc_interval"`
@@ -82,7 +82,7 @@ func Default() *Config {
 			HTTPAddr:  ":8080",
 		},
 		Storage: StorageConfig{
-			Backend:    "sqlite", // default to sqlite
+			Backend:    "sqlite",
 			DataDir:    "./data",
 			SyncWrites: false,
 			GCInterval: 5 * time.Minute,

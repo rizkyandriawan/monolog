@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useParams, useNavigate } from 'react-router-dom'
 import {
   Box,
   Heading,
@@ -35,29 +36,50 @@ import {
   NumberInputStepper,
   NumberIncrementStepper,
   NumberDecrementStepper,
+  Tabs,
+  TabList,
+  TabPanels,
+  Tab,
+  TabPanel,
+  IconButton,
+  Tooltip,
 } from '@chakra-ui/react'
 import type { Topic, Message } from '../api/client'
 import { api } from '../api/client'
 
-interface TopicsProps {
-  initialTopic?: string
-}
+export function Topics() {
+  const { topicName, offset: urlOffset } = useParams()
+  const navigate = useNavigate()
 
-export function Topics({ initialTopic }: TopicsProps) {
   const [topics, setTopics] = useState<Topic[]>([])
-  const [selectedTopic, setSelectedTopic] = useState<string | null>(initialTopic ?? null)
+  const [selectedTopic, setSelectedTopic] = useState<string | null>(topicName ?? null)
   const [messages, setMessages] = useState<Message[]>([])
-  const [offset, setOffset] = useState(0)
+  const [offset, setOffset] = useState(urlOffset ? parseInt(urlOffset) : 0)
   const [loading, setLoading] = useState(false)
   const [newTopicName, setNewTopicName] = useState('')
   const [produceKey, setProduceKey] = useState('')
   const [produceValue, setProduceValue] = useState('')
+  const [selectedMessage, setSelectedMessage] = useState<Message | null>(null)
 
   const { isOpen: isCreateOpen, onOpen: onCreateOpen, onClose: onCreateClose } = useDisclosure()
   const { isOpen: isProduceOpen, onOpen: onProduceOpen, onClose: onProduceClose } = useDisclosure()
+  const { isOpen: isDetailOpen, onOpen: onDetailOpen, onClose: onDetailClose } = useDisclosure()
   const toast = useToast()
   const cardBg = useColorModeValue('white', 'gray.800')
   const codeBg = useColorModeValue('gray.100', 'gray.900')
+
+  // Sync URL params to state
+  useEffect(() => {
+    if (topicName && topicName !== selectedTopic) {
+      setSelectedTopic(topicName)
+    }
+    if (urlOffset) {
+      const parsed = parseInt(urlOffset)
+      if (!isNaN(parsed) && parsed !== offset) {
+        setOffset(parsed)
+      }
+    }
+  }, [topicName, urlOffset])
 
   useEffect(() => {
     loadTopics()
@@ -65,9 +87,22 @@ export function Topics({ initialTopic }: TopicsProps) {
 
   useEffect(() => {
     if (selectedTopic) {
-      loadMessages(selectedTopic, 0)
+      loadMessages(selectedTopic, offset)
     }
   }, [selectedTopic])
+
+  // Update URL when topic/offset changes
+  function updateUrl(topic: string | null, newOffset?: number) {
+    if (topic) {
+      if (newOffset !== undefined && newOffset > 0) {
+        navigate(`/topics/${topic}/${newOffset}`, { replace: true })
+      } else {
+        navigate(`/topics/${topic}`, { replace: true })
+      }
+    } else {
+      navigate('/topics', { replace: true })
+    }
+  }
 
   async function loadTopics() {
     try {
@@ -84,6 +119,7 @@ export function Topics({ initialTopic }: TopicsProps) {
       const m = await api.getMessages(topic, startOffset, 50)
       setMessages(m)
       setOffset(startOffset)
+      updateUrl(topic, startOffset)
     } catch {
       toast({ title: 'Failed to load messages', status: 'error' })
     } finally {
@@ -112,6 +148,7 @@ export function Topics({ initialTopic }: TopicsProps) {
       if (selectedTopic === name) {
         setSelectedTopic(null)
         setMessages([])
+        updateUrl(null)
       }
       loadTopics()
     } catch {
@@ -131,6 +168,29 @@ export function Topics({ initialTopic }: TopicsProps) {
     } catch {
       toast({ title: 'Failed to produce message', status: 'error' })
     }
+  }
+
+  function handleSelectTopic(name: string) {
+    setSelectedTopic(name)
+    setOffset(0)
+    updateUrl(name)
+  }
+
+  function handleOpenDetail(msg: Message) {
+    setSelectedMessage(msg)
+    onDetailOpen()
+  }
+
+  function handleMoveToDLQ() {
+    if (!selectedMessage || !selectedTopic) return
+    // TODO: Implement actual DLQ move
+    toast({
+      title: 'Move to DLQ',
+      description: `Message ${selectedMessage.offset} from ${selectedTopic} will be moved to __dlq (not implemented yet)`,
+      status: 'info',
+      duration: 3000,
+    })
+    onDetailClose()
   }
 
   const currentTopicMeta = topics.find(t => t.name === selectedTopic)
@@ -165,7 +225,7 @@ export function Topics({ initialTopic }: TopicsProps) {
                     _hover={{
                       bg: selectedTopic === topic.name ? 'blue.500' : 'gray.700',
                     }}
-                    onClick={() => setSelectedTopic(topic.name)}
+                    onClick={() => handleSelectTopic(topic.name)}
                   >
                     <HStack justify="space-between">
                       <Text fontWeight="medium" noOfLines={1}>
@@ -174,7 +234,7 @@ export function Topics({ initialTopic }: TopicsProps) {
                       <Badge
                         colorScheme={selectedTopic === topic.name ? 'whiteAlpha' : 'blue'}
                       >
-                        {topic.latest_offset}
+                        {topic.latest_offset + 1}
                       </Badge>
                     </HStack>
                   </Box>
@@ -198,7 +258,7 @@ export function Topics({ initialTopic }: TopicsProps) {
                   <VStack align="start" spacing={0}>
                     <Heading size="md">{selectedTopic}</Heading>
                     <Text fontSize="sm" color="gray.500">
-                      {currentTopicMeta?.latest_offset ?? 0} messages
+                      {(currentTopicMeta?.latest_offset ?? -1) + 1} messages
                     </Text>
                   </VStack>
                   <HStack>
@@ -274,12 +334,17 @@ export function Topics({ initialTopic }: TopicsProps) {
                           <Th w="80px">Offset</Th>
                           <Th w="120px">Key</Th>
                           <Th>Value</Th>
-                          <Th w="180px">Timestamp</Th>
+                          <Th w="60px"></Th>
                         </Tr>
                       </Thead>
                       <Tbody>
                         {messages.map(msg => (
-                          <Tr key={msg.offset}>
+                          <Tr
+                            key={msg.offset}
+                            _hover={{ bg: 'gray.700' }}
+                            cursor="pointer"
+                            onClick={() => handleOpenDetail(msg)}
+                          >
                             <Td>
                               <Code fontSize="xs">{msg.offset}</Code>
                             </Td>
@@ -294,15 +359,27 @@ export function Topics({ initialTopic }: TopicsProps) {
                                 bg={codeBg}
                                 p={1}
                                 display="block"
-                                whiteSpace="pre-wrap"
-                                maxH="100px"
-                                overflowY="auto"
+                                whiteSpace="nowrap"
+                                overflow="hidden"
+                                textOverflow="ellipsis"
+                                maxW="400px"
                               >
-                                {formatValue(msg.value)}
+                                {msg.value}
                               </Code>
                             </Td>
-                            <Td fontSize="xs" color="gray.500">
-                              {new Date(msg.timestamp).toLocaleString()}
+                            <Td>
+                              <Tooltip label="View details">
+                                <IconButton
+                                  aria-label="View"
+                                  icon={<Text>👁</Text>}
+                                  size="xs"
+                                  variant="ghost"
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    handleOpenDetail(msg)
+                                  }}
+                                />
+                              </Tooltip>
                             </Td>
                           </Tr>
                         ))}
@@ -407,6 +484,120 @@ export function Topics({ initialTopic }: TopicsProps) {
           </ModalFooter>
         </ModalContent>
       </Modal>
+
+      {/* Message Detail Modal */}
+      <Modal isOpen={isDetailOpen} onClose={onDetailClose} size="xl">
+        <ModalOverlay />
+        <ModalContent bg={cardBg} maxW="800px">
+          <ModalHeader>
+            <HStack justify="space-between" pr={8}>
+              <Text>Message Detail</Text>
+              <Badge colorScheme="blue">Offset {selectedMessage?.offset}</Badge>
+            </HStack>
+          </ModalHeader>
+          <ModalCloseButton />
+          <ModalBody>
+            {selectedMessage && (
+              <VStack spacing={4} align="stretch">
+                {/* Metadata */}
+                <HStack spacing={8} wrap="wrap">
+                  <Box>
+                    <Text fontSize="xs" color="gray.500" textTransform="uppercase">Topic</Text>
+                    <Text fontWeight="medium">{selectedTopic}</Text>
+                  </Box>
+                  <Box>
+                    <Text fontSize="xs" color="gray.500" textTransform="uppercase">Offset</Text>
+                    <Text fontWeight="medium">{selectedMessage.offset}</Text>
+                  </Box>
+                  <Box>
+                    <Text fontSize="xs" color="gray.500" textTransform="uppercase">Timestamp</Text>
+                    <Text fontWeight="medium">{new Date(selectedMessage.timestamp).toLocaleString()}</Text>
+                  </Box>
+                  <Box>
+                    <Text fontSize="xs" color="gray.500" textTransform="uppercase">Key</Text>
+                    <Code>{selectedMessage.key || '(null)'}</Code>
+                  </Box>
+                  {selectedMessage.codec !== 0 && (
+                    <Box>
+                      <Text fontSize="xs" color="gray.500" textTransform="uppercase">Codec</Text>
+                      <Badge colorScheme="purple">{getCodecName(selectedMessage.codec)}</Badge>
+                    </Box>
+                  )}
+                </HStack>
+
+                {/* Value with tabs */}
+                <Tabs variant="enclosed" size="sm">
+                  <TabList>
+                    <Tab>Raw</Tab>
+                    <Tab>Formatted</Tab>
+                    <Tab>Hex</Tab>
+                  </TabList>
+                  <TabPanels>
+                    <TabPanel p={0} pt={3}>
+                      <Code
+                        display="block"
+                        whiteSpace="pre-wrap"
+                        p={4}
+                        bg={codeBg}
+                        borderRadius="md"
+                        maxH="400px"
+                        overflowY="auto"
+                        fontSize="sm"
+                      >
+                        {selectedMessage.value}
+                      </Code>
+                    </TabPanel>
+                    <TabPanel p={0} pt={3}>
+                      <Code
+                        display="block"
+                        whiteSpace="pre-wrap"
+                        p={4}
+                        bg={codeBg}
+                        borderRadius="md"
+                        maxH="400px"
+                        overflowY="auto"
+                        fontSize="sm"
+                      >
+                        {formatValue(selectedMessage.value)}
+                      </Code>
+                    </TabPanel>
+                    <TabPanel p={0} pt={3}>
+                      <Code
+                        display="block"
+                        whiteSpace="pre-wrap"
+                        p={4}
+                        bg={codeBg}
+                        borderRadius="md"
+                        maxH="400px"
+                        overflowY="auto"
+                        fontSize="xs"
+                        fontFamily="mono"
+                      >
+                        {toHex(selectedMessage.value)}
+                      </Code>
+                    </TabPanel>
+                  </TabPanels>
+                </Tabs>
+              </VStack>
+            )}
+          </ModalBody>
+          <ModalFooter>
+            <HStack spacing={3}>
+              <Button
+                colorScheme="orange"
+                variant="outline"
+                onClick={handleMoveToDLQ}
+                leftIcon={<Text>🗑</Text>}
+              >
+                Move to DLQ
+              </Button>
+              <Button variant="ghost" onClick={onDetailClose}>
+                Close
+              </Button>
+            </HStack>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
     </VStack>
   )
 }
@@ -416,6 +607,43 @@ function formatValue(value: string): string {
     const parsed = JSON.parse(value)
     return JSON.stringify(parsed, null, 2)
   } catch {
-    return value
+    // Try base64 decode
+    try {
+      const decoded = atob(value)
+      // Check if it looks like JSON after decoding
+      const parsed = JSON.parse(decoded)
+      return `[Base64 Decoded]\n${JSON.stringify(parsed, null, 2)}`
+    } catch {
+      // Try to detect if it's gzip/snappy compressed
+      if (value.startsWith('H4sI')) {
+        return `[Gzip Compressed - Base64]\n${value}`
+      }
+      return value
+    }
+  }
+}
+
+function toHex(str: string): string {
+  const lines: string[] = []
+  const bytes = new TextEncoder().encode(str)
+
+  for (let i = 0; i < bytes.length; i += 16) {
+    const chunk = bytes.slice(i, i + 16)
+    const hex = Array.from(chunk).map(b => b.toString(16).padStart(2, '0')).join(' ')
+    const ascii = Array.from(chunk).map(b => (b >= 32 && b < 127) ? String.fromCharCode(b) : '.').join('')
+    lines.push(`${i.toString(16).padStart(8, '0')}  ${hex.padEnd(48)}  ${ascii}`)
+  }
+
+  return lines.join('\n')
+}
+
+function getCodecName(codec: number): string {
+  switch (codec) {
+    case 0: return 'None'
+    case 1: return 'Gzip'
+    case 2: return 'Snappy'
+    case 3: return 'LZ4'
+    case 4: return 'Zstd'
+    default: return `Unknown (${codec})`
   }
 }

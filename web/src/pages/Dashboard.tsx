@@ -24,7 +24,7 @@ import type { Topic, Group } from '../api/client'
 import { api } from '../api/client'
 
 interface DashboardProps {
-  onNavigate: (page: string, data?: unknown) => void
+  onNavigate: (page: string, data?: { topic?: string; group?: string }) => void
 }
 
 export function Dashboard({ onNavigate }: DashboardProps) {

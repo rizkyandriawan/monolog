@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Routes, Route, useNavigate, useLocation } from 'react-router-dom'
 import { Layout } from './components/Layout'
 import { Dashboard } from './pages/Dashboard'
 import { Topics } from './pages/Topics'
@@ -8,10 +9,10 @@ import { Actions } from './pages/Actions'
 import { api } from './api/client'
 
 function App() {
-  const [currentPage, setCurrentPage] = useState('dashboard')
-  const [pageData, setPageData] = useState<unknown>(null)
   const [stats, setStats] = useState({ topics: 0, groups: 0, pending: 0 })
   const [connected, setConnected] = useState(false)
+  const navigate = useNavigate()
+  const location = useLocation()
 
   useEffect(() => {
     checkConnection()
@@ -39,36 +40,63 @@ function App() {
     }
   }
 
-  function handleNavigate(page: string, data?: unknown) {
-    setCurrentPage(page)
-    setPageData(data)
+  function handleNavigate(page: string, data?: { topic?: string; group?: string }) {
+    switch (page) {
+      case 'dashboard':
+        navigate('/')
+        break
+      case 'topics':
+        if (data?.topic) {
+          navigate(`/topics/${data.topic}`)
+        } else {
+          navigate('/topics')
+        }
+        break
+      case 'groups':
+        if (data?.group) {
+          navigate(`/groups/${data.group}`)
+        } else {
+          navigate('/groups')
+        }
+        break
+      case 'pending':
+        navigate('/pending')
+        break
+      case 'actions':
+        navigate('/actions')
+        break
+      default:
+        navigate('/')
+    }
   }
 
-  function renderPage() {
-    switch (currentPage) {
-      case 'dashboard':
-        return <Dashboard onNavigate={handleNavigate} />
-      case 'topics':
-        return <Topics initialTopic={(pageData as { topic?: string })?.topic} />
-      case 'groups':
-        return <Groups initialGroup={(pageData as { group?: string })?.group} />
-      case 'pending':
-        return <Pending />
-      case 'actions':
-        return <Actions />
-      default:
-        return <Dashboard onNavigate={handleNavigate} />
-    }
+  // Determine current page from location
+  const getCurrentPage = () => {
+    const path = location.pathname
+    if (path.startsWith('/topics')) return 'topics'
+    if (path.startsWith('/groups')) return 'groups'
+    if (path === '/pending') return 'pending'
+    if (path === '/actions') return 'actions'
+    return 'dashboard'
   }
 
   return (
     <Layout
-      currentPage={currentPage}
+      currentPage={getCurrentPage()}
       onNavigate={handleNavigate}
       stats={stats}
       connected={connected}
     >
-      {renderPage()}
+      <Routes>
+        <Route path="/" element={<Dashboard onNavigate={handleNavigate} />} />
+        <Route path="/topics" element={<Topics />} />
+        <Route path="/topics/:topicName" element={<Topics />} />
+        <Route path="/topics/:topicName/:offset" element={<Topics />} />
+        <Route path="/groups" element={<Groups />} />
+        <Route path="/groups/:groupId" element={<Groups />} />
+        <Route path="/pending" element={<Pending />} />
+        <Route path="/actions" element={<Actions />} />
+      </Routes>
     </Layout>
   )
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/rizkyandriawan/monolog/internal/config"
@@ -12,6 +13,28 @@ import (
 	"github.com/rizkyandriawan/monolog/internal/server"
 	"github.com/rizkyandriawan/monolog/internal/store"
 )
+
+// acquireDataLock acquires an exclusive lock on the data directory
+// Returns the lock file handle (must be kept open) or error if already locked
+func acquireDataLock(dataDir string) (*os.File, error) {
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		return nil, fmt.Errorf("create data dir: %w", err)
+	}
+
+	lockPath := filepath.Join(dataDir, ".lock")
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, fmt.Errorf("open lock file: %w", err)
+	}
+
+	// Try to acquire exclusive lock (non-blocking)
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("another monolog instance is using data directory %s", dataDir)
+	}
+
+	return f, nil
+}
 
 var (
 	version = "dev"
@@ -60,7 +83,7 @@ func runServe(args []string) {
 	httpAddr := fs.String("http-addr", ":8080", "HTTP API listen address")
 	dataDir := fs.String("data-dir", "./data", "Data directory for storage")
 	logLevel := fs.String("log-level", "info", "Log level (debug, info, warn, error)")
-	backend := fs.String("storage", "", "Storage backend: sqlite or badger")
+	backend := fs.String("storage", "", "Storage backend: sqlite or sqlite:memory")
 
 	fs.Parse(args)
 
@@ -88,15 +111,28 @@ func runServe(args []string) {
 		cfg.Storage.Backend = *backend
 	}
 
+	// Acquire data directory lock (except for memory mode)
+	var lockFile *os.File
+	if cfg.Storage.Backend != "sqlite:memory" {
+		var err error
+		lockFile, err = acquireDataLock(cfg.Storage.DataDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to acquire data lock: %v\n", err)
+			os.Exit(1)
+		}
+		defer lockFile.Close()
+	}
+
 	// Initialize store based on backend
 	var topicStore store.TopicStoreInterface
 	var groupStore store.GroupStoreInterface
 	var closer func() error
 
-	switch cfg.Storage.Backend {
-	case "sqlite":
-		fmt.Printf("Using SQLite storage backend\n")
-		sqliteDB, err := store.OpenSQLite(cfg.Storage.DataDir)
+	storageBackend := cfg.Storage.Backend
+	switch {
+	case storageBackend == "sqlite" || storageBackend == "sqlite:disk":
+		fmt.Printf("Using SQLite storage backend (disk)\n")
+		sqliteDB, err := store.OpenSQLite(cfg.Storage.DataDir, "disk")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "failed to open sqlite store: %v\n", err)
 			os.Exit(1)
@@ -105,19 +141,19 @@ func runServe(args []string) {
 		topicStore = store.NewSQLiteTopicStore(sqliteDB)
 		groupStore = store.NewSQLiteGroupStore(sqliteDB)
 
-	case "badger":
-		fmt.Printf("Using BadgerDB storage backend\n")
-		db, err := store.Open(cfg.Storage.DataDir)
+	case storageBackend == "sqlite:memory":
+		fmt.Printf("Using SQLite storage backend (in-memory)\n")
+		sqliteDB, err := store.OpenSQLite(cfg.Storage.DataDir, "memory")
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "failed to open badger store: %v\n", err)
+			fmt.Fprintf(os.Stderr, "failed to open sqlite store: %v\n", err)
 			os.Exit(1)
 		}
-		closer = db.Close
-		topicStore = store.NewTopicStore(db)
-		groupStore = store.NewGroupStore(db)
+		closer = sqliteDB.Close
+		topicStore = store.NewSQLiteTopicStore(sqliteDB)
+		groupStore = store.NewSQLiteGroupStore(sqliteDB)
 
 	default:
-		fmt.Fprintf(os.Stderr, "unknown storage backend: %s (use 'sqlite' or 'badger')\n", cfg.Storage.Backend)
+		fmt.Fprintf(os.Stderr, "unknown storage backend: %s (use 'sqlite' or 'sqlite:memory')\n", storageBackend)
 		os.Exit(1)
 	}
 	defer closer()

@@ -13,17 +13,32 @@ import (
 
 // SQLiteDB wraps SQLite database
 type SQLiteDB struct {
-	db *sql.DB
+	db       *sql.DB
+	inMemory bool
 }
 
 // OpenSQLite opens or creates a SQLite database
-func OpenSQLite(dataDir string) (*SQLiteDB, error) {
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
-		return nil, err
+// mode can be "memory" or "disk" (default)
+func OpenSQLite(dataDir string, mode string) (*SQLiteDB, error) {
+	var dsn string
+	var inMemory bool
+
+	if mode == "memory" {
+		// Shared in-memory database
+		dsn = "file::memory:?cache=shared&_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000"
+		inMemory = true
+	} else {
+		// Disk-based database with FULL synchronous for durability
+		// FULL = fsync after each transaction, slower but durable
+		if err := os.MkdirAll(dataDir, 0755); err != nil {
+			return nil, err
+		}
+		dbPath := filepath.Join(dataDir, "monolog.db")
+		dsn = dbPath + "?_journal_mode=WAL&_synchronous=FULL&_busy_timeout=5000"
+		inMemory = false
 	}
 
-	dbPath := filepath.Join(dataDir, "monolog.db")
-	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000")
+	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, err
 	}
@@ -32,7 +47,7 @@ func OpenSQLite(dataDir string) (*SQLiteDB, error) {
 	db.SetMaxOpenConns(1) // SQLite works best with single writer
 	db.SetMaxIdleConns(1)
 
-	s := &SQLiteDB{db: db}
+	s := &SQLiteDB{db: db, inMemory: inMemory}
 	if err := s.initSchema(); err != nil {
 		db.Close()
 		return nil, err
@@ -100,6 +115,10 @@ func (s *SQLiteDB) Close() error {
 
 func (s *SQLiteDB) DB() *sql.DB {
 	return s.db
+}
+
+func (s *SQLiteDB) IsInMemory() bool {
+	return s.inMemory
 }
 
 // ============================================================================
@@ -808,43 +827,6 @@ func (s *SQLiteGroupStore) updateGroupMeta(group *Group) {
 	)
 }
 
-// ============================================================================
-// Interface to match existing stores
-// ============================================================================
-
-// TopicStoreInterface defines topic store operations
-type TopicStoreInterface interface {
-	CreateTopic(name string) error
-	TopicExists(name string) bool
-	ListTopics() []string
-	DeleteTopic(name string) error
-	Append(topic string, records []Record) (int64, error)
-	AppendRaw(topic string, data []byte, codec int8, recordCount int) (int64, error)
-	Read(topic string, fromOffset int64, maxRecords int) ([]Record, error)
-	LatestOffset(topic string) (int64, error)
-	EarliestOffset(topic string) (int64, error)
-	DeleteBefore(topic string, cutoff time.Time) (int, error)
-	GetMeta(topic string) (*TopicMeta, error)
-}
-
-// GroupStoreInterface defines group store operations
-type GroupStoreInterface interface {
-	GetOrCreateGroup(groupID string) (*Group, error)
-	GetGroup(groupID string) (*Group, bool)
-	ListGroups() []string
-	AddMember(groupID, memberID, clientID string, metadata []byte) error
-	RemoveMember(groupID, memberID string) error
-	UpdateHeartbeat(groupID, memberID string) error
-	SetMemberAssignment(groupID, memberID string, assignment []byte) error
-	IncrementGeneration(groupID string) (int32, error)
-	CommitOffset(groupID, topic string, offset int64) error
-	FetchOffset(groupID, topic string) (int64, error)
-	ExpireMembers(timeout time.Duration) ([]string, error)
-	DeleteGroup(groupID string) error
-}
-
 // Ensure implementations satisfy interfaces
-var _ TopicStoreInterface = (*TopicStore)(nil)
 var _ TopicStoreInterface = (*SQLiteTopicStore)(nil)
-var _ GroupStoreInterface = (*GroupStore)(nil)
 var _ GroupStoreInterface = (*SQLiteGroupStore)(nil)

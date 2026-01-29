@@ -427,10 +427,10 @@ func (s *KafkaServer) handleProduce(header protocol.RequestHeader, dec *protocol
 				LogStartOffset:  0,
 			}
 
-			// Extract codec from record batch attributes
+			// Extract codec from record batch attributes (bytes 21-22)
 			var codec int8 = 0
-			if len(p.Records) > 16 {
-				attrs := int16(p.Records[16])<<8 | int16(p.Records[17])
+			if len(p.Records) >= 23 {
+				attrs := int16(p.Records[21])<<8 | int16(p.Records[22])
 				codec = int8(attrs & 0x07)
 			}
 
