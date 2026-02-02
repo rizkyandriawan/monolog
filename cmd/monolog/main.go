@@ -37,7 +37,7 @@ func acquireDataLock(dataDir string) (*os.File, error) {
 }
 
 var (
-	version = "dev"
+	version = "0.2.0"
 	commit  = "none"
 )
 

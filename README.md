@@ -1,267 +1,309 @@
 # Monolog
 
-A lightweight, single-node message broker that speaks the Kafka protocol. Drop-in compatible with existing Kafka clients for development and testing scenarios.
+A Kafka-compatible message broker in a single binary. Built for developers who need Kafka's protocol without Kafka's complexity.
 
-## Why Monolog?
+```
+┌─────────────────────────────────────────────────────────┐
+│                       Monolog                           │
+│                                                         │
+│   Kafka Protocol (:9092)          HTTP API (:8080)      │
+│         │                              │                │
+│         ▼                              ▼                │
+│   ┌──────────────────────────────────────────────┐      │
+│   │                   Engine                     │      │
+│   │         (topics, groups, offsets)            │      │
+│   └──────────────────────────────────────────────┘      │
+│                         │                               │
+│                         ▼                               │
+│   ┌──────────────────────────────────────────────┐      │
+│   │              SQLite + WAL                    │      │
+│   │         (synchronous=FULL, fsync)            │      │
+│   └──────────────────────────────────────────────┘      │
+└─────────────────────────────────────────────────────────┘
+```
 
-Running Kafka locally is a pain. You need Zookeeper (or KRaft), deal with JVM memory overhead, wait for slow startups, and manage multiple processes just to test a simple producer/consumer flow. Docker Compose helps, but you're still looking at 500MB+ RAM for something that should be simple.
+## The Problem
 
-Monolog exists because sometimes you just want to:
+**For local development:** Kafka requires Zookeeper (or KRaft), consumes 500MB+ RAM, and takes forever to start. Docker Compose helps, but you're still waiting 30+ seconds for something that should be instant.
 
-- **Develop locally** without spinning up infrastructure
-- **Run integration tests** in CI without container overhead
-- **Prototype quickly** without Kafka's operational complexity
-- **Learn the Kafka protocol** with a readable, hackable codebase
+**For small production:** A proper Kafka cluster needs 3 brokers minimum. On AWS, that's $300-500/month before you've even written any code. For a project doing 1,000 messages/second, that's massive overkill.
 
-It's not a Kafka replacement. It's a Kafka stand-in for when you don't need distributed consensus, replication, or horizontal scaling - you just need something that speaks the protocol.
+**What we actually need:**
+- Kafka protocol compatibility (existing clients just work)
+- Durability (data survives crashes)
+- Simplicity (single binary, zero config)
 
-~5MB binary. ~20MB RAM. Starts instantly. Works with your existing Kafka clients.
+## The Approach
 
-### Production for Light Workloads
+**Language: Go**
+- Single static binary (~5MB)
+- No runtime dependencies
+- Cross-platform (Linux, macOS, Windows)
 
-Monolog is also suitable for **production use in light workload scenarios**.
+**Storage: SQLite with WAL**
+- Battle-tested durability
+- `synchronous=FULL` mode (fsync per transaction)
+- Automatic crash recovery
 
-If you're running a hobby project or an early-stage startup, a proper Kafka cluster (3 brokers minimum for fault tolerance) on AWS can easily cost $300-500/month. For many small projects doing <100 messages/second, that's massive overkill.
+**Protocol: Kafka-compatible**
+- Works with kafka-go, librdkafka, KafkaJS, Sarama
+- Produce, Fetch, Consumer Groups, Offset Management
+- Compression: gzip, snappy, lz4, zstd
 
-Monolog can run on a $5/month VPS alongside your app. No cluster coordination, no ZooKeeper, no JVM tuning. Just a single binary that handles your message queue needs until you actually need to scale.
+**Intentional trade-offs:**
+- Single node (no replication) → simpler, cheaper
+- Single partition per topic → guaranteed ordering, simpler offset management
+- No SASL auth → rely on network isolation
 
-## Benchmark Results
+## Supported Kafka APIs
 
-Tested on Linux (NVMe SSD) with kafka-go client, SQLite backend with full durability (`synchronous=FULL`):
+| API | Key | Status |
+|-----|-----|--------|
+| Produce | 0 | ✅ Supported |
+| Fetch | 1 | ✅ Supported |
+| ListOffsets | 2 | ✅ Supported |
+| Metadata | 3 | ✅ Supported |
+| OffsetCommit | 8 | ✅ Supported |
+| OffsetFetch | 9 | ✅ Supported |
+| FindCoordinator | 10 | ✅ Supported |
+| JoinGroup | 11 | ✅ Supported |
+| Heartbeat | 12 | ✅ Supported |
+| LeaveGroup | 13 | ✅ Supported |
+| SyncGroup | 14 | ✅ Supported |
+| ApiVersions | 18 | ✅ Supported |
+| CreateTopics | 19 | ✅ Supported |
 
-### Throughput & Latency
+**Not supported:** Transactions, Admin APIs (DescribeConfigs, AlterConfigs), ACLs, Quotas.
+
+## Quick Start
+
+```bash
+# Build from source
+git clone https://github.com/rizkyandriawan/monolog.git
+cd monolog
+go build -o monolog ./cmd/monolog
+
+# Start server
+./monolog serve
+
+# That's it. Kafka on :9092, HTTP on :8080
+```
+
+### Producer Example (Go)
+
+```go
+writer := &kafka.Writer{
+    Addr:     kafka.TCP("localhost:9092"),
+    Topic:    "events",
+    Balancer: &kafka.LeastBytes{},
+}
+defer writer.Close()
+
+err := writer.WriteMessages(ctx, kafka.Message{
+    Key:   []byte("user-123"),
+    Value: []byte(`{"event": "signup"}`),
+})
+```
+
+### Consumer Example (Go)
+
+```go
+reader := kafka.NewReader(kafka.ReaderConfig{
+    Brokers:  []string{"localhost:9092"},
+    Topic:    "events",
+    GroupID:  "my-consumer-group",
+    MinBytes: 1,
+    MaxBytes: 10e6,
+})
+defer reader.Close()
+
+for {
+    msg, err := reader.ReadMessage(ctx)
+    if err != nil {
+        break
+    }
+    fmt.Printf("offset=%d key=%s value=%s\n", msg.Offset, msg.Key, msg.Value)
+    // Offset is auto-committed after ReadMessage
+}
+```
+
+### Quick Test with kcat
+
+```bash
+# Produce
+echo '{"event":"test"}' | kcat -b localhost:9092 -t events -P
+
+# Consume
+kcat -b localhost:9092 -t events -C -o beginning
+```
+
+## Test Methodology & Results
+
+All tests run on Linux with NVMe SSD, using kafka-go client.
+
+### Throughput Test
+
+**Method:** 10 concurrent producers, 512-byte messages, 60 seconds sustained.
 
 | Metric | Result |
 |--------|--------|
-| Throughput (sustained) | **2,900+ msg/s** |
+| Throughput | **2,906 msg/s** |
 | Latency p50 | 3ms |
 | Latency p95 | 5ms |
 | Latency p99 | 7ms |
-| Latency max | 17ms |
-| Memory | ~25 MB |
-| Error rate | 0% |
+| Errors | 0 |
 
-### Durability Test Results
+### Durability Test
 
-**Test 1.3: Kill During Heavy Write (30 repetitions)**
+**Method:** Produce under load → `kill -9` → restart → verify recovery. Repeated 30 times.
 
 | Metric | Result |
 |--------|--------|
 | Test runs | 30 |
 | Passed | **30 (100%)** |
-| Failed | 0 |
 | Data loss | **0 messages** |
 | Total recovered | 811,086 messages |
 
-Each run: 10 concurrent producers at 500 msg/s, kill -9 after 5-14 seconds, restart and verify recovery.
+Each run: 10 producers at 500 msg/s, kill after 5-14 seconds, restart, count recovered messages.
 
-**Verdict:** Zero data loss across all crash/recovery cycles. SQLite WAL with fsync provides strong durability guarantees.
+**What "zero data loss" means:** Messages that received an acknowledgment from the server were all recovered. Messages in-flight (not yet acked) at crash time may be lost—this is expected behavior.
 
-## Features
+### Throughput by Disk Type
 
-- **Kafka Protocol Compatible** - Works with kafka-go, librdkafka, KafkaJS, Sarama
-- **Durable by Default** - SQLite with WAL mode and fsync per transaction
-- **Web UI** - Built-in dashboard for topic/message inspection
-- **Consumer Groups** - Full support for group coordination and offset management
-- **Compression** - Transparent support for gzip, snappy, lz4, zstd
-- **Long Polling** - Efficient fetch with configurable wait times
-- **Message Retention** - Configurable time-based cleanup
-- **Data Locking** - Prevents corruption from concurrent instances
-- **Zero Dependencies** - Single binary, no external services
+Performance is **fsync-bound**. Disk type determines throughput:
 
-## Quick Start
+| Disk Type | Expected Throughput |
+|-----------|---------------------|
+| NVMe SSD | 2,000-3,000 msg/s |
+| SATA SSD | 500-800 msg/s |
+| HDD | ~100 msg/s |
 
-```bash
-# Build
-go build -o monolog ./cmd/monolog
+## Use Cases
 
-# Run with defaults (SQLite, port 9092)
-./monolog serve
+### Good Fit
 
-# Or with options
-./monolog serve \
-  -kafka-addr :9092 \
-  -http-addr :8080 \
-  -data-dir ./data \
-  -storage sqlite
-```
+- **Local development** — instant startup, zero config
+- **Integration tests / CI** — no container overhead, no Docker required
+- **Production ≤2,000 msg/s** — with tolerance for brief restart downtime
+- **Internal tools** — backoffice, admin systems, batch jobs
+- **Startups** — before you need (or can afford) real Kafka
 
-Access:
-- Kafka protocol: `localhost:9092`
-- Web UI: `http://localhost:8080`
+### Not a Fit
 
-### Usage with Kafka Clients
+- Sustained throughput >5,000 msg/s
+- High availability requirements (99.99% SLA)
+- Multi-region / geo-redundancy needs
+- Multi-partition topics for parallel consumers
+- Compliance requirements (SOC2, HIPAA, etc.)
 
-**Go (kafka-go)**
+For these, use Apache Kafka, Redpanda, or managed services.
+
+## Production Recommendations
+
+Monolog is **durable but not highly available**. Single node means:
+- Data survives crashes ✓
+- Service unavailable during restarts ✗
+
+Design your system accordingly:
+
+### Producers
+
 ```go
 writer := &kafka.Writer{
-    Addr:  kafka.TCP("localhost:9092"),
-    Topic: "my-topic",
+    Addr:         kafka.TCP("localhost:9092"),
+    Topic:        "events",
+    WriteTimeout: 10 * time.Second,
+    RequiredAcks: kafka.RequireOne,
+    // Async for higher throughput, Sync for guaranteed delivery
+    Async: false,
 }
-writer.WriteMessages(ctx, kafka.Message{Value: []byte("hello")})
 ```
 
-**Node.js (KafkaJS)**
-```javascript
-const kafka = new Kafka({ brokers: ['localhost:9092'] })
-const producer = kafka.producer()
-await producer.send({ topic: 'my-topic', messages: [{ value: 'hello' }] })
-```
+- **Retry with backoff** — handle temporary unavailability
+- **Set reasonable timeouts** — don't block forever (5-10s)
+- **Use message keys for deduplication** — if consumer needs idempotency
+
+### Consumers
+
+- **Commit offset AFTER processing** — for at-least-once delivery
+- **Make processing idempotent** — duplicates possible after crash recovery
+- **Reconnect with backoff** — expect occasional disconnects during restarts
+
+### Operations
+
+- **Auto-restart:** Use systemd or Docker restart policy
+- **Health check:** `curl http://localhost:8080/api/topics` → 200 = healthy
+- **Backup:** Periodic rsync of data directory
+- **Retention:** Configure `retention.max_age` to prevent unbounded disk growth (default: 24h)
+
+### Hardware
+
+| Resource | Minimum | Recommended |
+|----------|---------|-------------|
+| Disk | SATA SSD | NVMe SSD |
+| RAM | 256MB | 512MB |
+| CPU | 1 core | 2 cores |
 
 ## Configuration
 
-### Command Line Flags
-
 ```bash
 ./monolog serve \
-  -config config.yaml \
-  -kafka-addr :9092 \
-  -http-addr :8080 \
-  -data-dir ./data \
-  -storage sqlite \
-  -log-level info
+    -kafka-addr :9092 \
+    -http-addr :8080 \
+    -data-dir ./data \
+    -storage sqlite \
+    -log-level info
 ```
 
-### Environment Variables
+Or via environment:
 
 ```bash
-MONOLOG_KAFKA_ADDR=:9092
-MONOLOG_HTTP_ADDR=:8080
-MONOLOG_DATA_DIR=./data
-MONOLOG_STORAGE_BACKEND=sqlite
-MONOLOG_LOG_LEVEL=info
-MONOLOG_AUTH_TOKEN=secret  # Enables HTTP auth
+export MONOLOG_KAFKA_ADDR=:9092
+export MONOLOG_HTTP_ADDR=:8080
+export MONOLOG_DATA_DIR=./data
+./monolog serve
 ```
 
-### Config File (YAML)
+### Retention
+
+Messages are retained for 24 hours by default. Configure in YAML:
 
 ```yaml
-server:
-  kafka_addr: ":9092"
-  http_addr: ":8080"
-
-storage:
-  backend: "sqlite"        # or "sqlite:memory" for non-persistent
-  data_dir: "./data"
-
-topics:
-  auto_create: true
-
-limits:
-  max_connections: 100
-  max_message_size: 1048576  # 1MB
-  max_fetch_bytes: 10485760  # 10MB
-
 retention:
   enabled: true
-  max_age: 24h
-  check_interval: 1m
-
-groups:
-  session_timeout: 30s
-  heartbeat_interval: 3s
-
-logging:
-  level: "info"
-  format: "text"
+  max_age: 24h        # delete messages older than this
+  check_interval: 1m  # how often to run cleanup
 ```
-
-## Storage Backends
-
-### SQLite Disk (Default)
-
-```bash
-./monolog serve -storage sqlite
-```
-
-- WAL mode with `synchronous=FULL` for durability
-- Survives kill -9 with zero data loss (verified)
-- ~25MB memory for typical workloads
-- Recommended for development and light production
-
-### SQLite Memory
-
-```bash
-./monolog serve -storage sqlite:memory
-```
-
-- No persistence, data lost on restart
-- Maximum performance for testing
-- Useful for CI/CD pipelines
-
-## Durability Guarantees
-
-With SQLite disk backend:
-
-- **Fsync per transaction** - Messages durable once acknowledged
-- **WAL recovery** - Automatic recovery after crash
-- **Data locking** - Prevents concurrent access corruption
-- **Tested** - 30/30 kill-during-heavy-write tests passed with zero data loss
-
-What can be lost:
-- In-flight messages not yet committed (typically <10 messages)
-
-## HTTP API
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/topics` | GET | List all topics |
-| `/api/topics` | POST | Create topic |
-| `/api/topics/{name}` | GET | Get topic details |
-| `/api/topics/{name}` | DELETE | Delete topic |
-| `/api/topics/{name}/messages` | GET | Read messages |
-| `/api/topics/{name}/messages` | POST | Produce message |
-| `/api/groups` | GET | List consumer groups |
-| `/api/groups/{id}` | GET | Get group details |
-| `/api/groups/{id}` | DELETE | Delete group |
-
-## Supported Kafka APIs
-
-| API | Key | Description |
-|-----|-----|-------------|
-| Produce | 0 | Write messages |
-| Fetch | 1 | Read messages |
-| ListOffsets | 2 | Get earliest/latest offsets |
-| Metadata | 3 | Topic and broker discovery |
-| OffsetCommit | 8 | Commit consumer offsets |
-| OffsetFetch | 9 | Fetch committed offsets |
-| FindCoordinator | 10 | Find group coordinator |
-| JoinGroup | 11 | Join consumer group |
-| Heartbeat | 12 | Keep membership alive |
-| LeaveGroup | 13 | Leave consumer group |
-| SyncGroup | 14 | Synchronize group state |
-| ApiVersions | 18 | Version negotiation |
-| CreateTopics | 19 | Create new topics |
-
-### Compression Codecs
-
-All standard Kafka compression codecs are supported:
-- None (0)
-- Gzip (1)
-- Snappy (2)
-- LZ4 (3)
-- Zstd (4)
-
-Messages are stored compressed and decompressed by client libraries transparently.
 
 ## Limitations
 
-- Single node only (no replication)
-- Single partition per topic
-- No SASL authentication on Kafka protocol
-- No TLS on Kafka protocol
+| Limitation | Reason |
+|------------|--------|
+| Single node only | Simplicity over availability |
+| Single partition per topic | Guaranteed ordering, simpler consumer logic |
+| No SASL/TLS on Kafka port | Use network isolation or VPN |
+| ~3,000 msg/s ceiling | fsync-bound (design choice for durability) |
+| No transactions | Not implemented |
 
-For high-throughput or distributed workloads, use Apache Kafka or Redpanda.
-
-## Building
+## HTTP API
 
 ```bash
-# Binary only
-go build -o monolog ./cmd/monolog
+# List topics
+curl http://localhost:8080/api/topics
 
-# With web UI
-cd web && npm install && npm run build && cd ..
-go build -o monolog ./cmd/monolog
+# Produce
+curl -X POST http://localhost:8080/api/topics/my-topic/messages \
+    -H "Content-Type: application/json" \
+    -d '{"key":"k1", "value":"hello"}'
+
+# Consume
+curl "http://localhost:8080/api/topics/my-topic/messages?offset=0&limit=10"
+
+# Topic info
+curl http://localhost:8080/api/topics/my-topic
+
+# Delete topic
+curl -X DELETE http://localhost:8080/api/topics/my-topic
 ```
 
 ## License
